@@ -1,0 +1,145 @@
+---
+title: "Course Project-Regression Analysis"
+author: "Mona Khaleghy Rad"
+date: '`r date()`'
+output: html_document
+---
+
+## Introduction
+
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. 
+
+One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, our goal is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants and predict the manner in which they did the exercise. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways.  This is the "classe" variable in the training set. You may use any of the other variables to predict with. 
+
+## Getting Data
+
+```{r}
+library(knitr)
+if(!file.exists("Training.csv")) {
+fileURLtr<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+download.file(fileURLtr, destfile="./data/Training.csv", method="curl")
+}
+
+Train<-read.csv("./Training.csv")
+
+if(!file.exists("Testing.csv")) {
+fileURLts<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+download.file(fileURLts, destfile="./data/Testing.csv", method="curl")
+}
+Test<-read.csv("./Testing.csv")
+```
+
+## Data Cleaning
+
+```{r}
+library(knitr)
+# keeping the variables that doesn't have NAs
+Train<-Train[, colSums(is.na(Train)) == 0]
+
+# removing variables with near zero variance 
+Train<- Train[, -nearZeroVar(Train)]
+# removing irrelevant variables (X, user_name, raw_timestamp_part_1,raw_timestamp_part_2, cvtd_timestamp, new_window, and nim_window)
+
+Train<-Train[,-c(1:7)]
+```
+
+## Data partitioning
+
+We partition the training set into 80% sub training set and 20% sub testing set for future cross validation. This subsetting should be done based on the "classe" variable, which is our training variable. Then since the data is rather large, we sample 1000 random rows for training model. 
+
+```{r, cache=TRUE}
+TrainPart <- createDataPartition(y = Train$classe, p = 0.8, list = FALSE)
+training<-Train[TrainPart,]
+testing<-Train[-TrainPart,]
+dim(training);dim(testing)
+
+sample<-sample(TrainPart,size=1000,replace=FALSE)
+tr<-Train[sample,]
+ts<-Train[-sample,]
+```
+
+## Training model
+I compare three training models, the Rain Forest (RF), which is a very accurate model, the boosting with trees (gbm) model, and the Naive Bayes(nb) model, which is a model-based prediction model.
+```{r, cache=TRUE}
+RF<-train(classe~., data=tr, method="rf")
+GBM<-train(classe~.,data=tr,method="gbm",verbose = FALSE)
+NB<-train(classe~.,data=tr,method="nb")
+
+
+# RF=train(classe~.,data=training,method="rf",trControl=tc, preProc=c("center", "scale"))
+# GBM=train(classe~.,data=training,method="gbm",verbose = FALSE)
+# NB=train(classe~.,data=training,method="nb")
+# table(RF$finalModel,GBM$finalModel,NB$finalModel)
+```
+
+```{r}
+RFpred=predict(RF,newdata=ts)
+RFaccuracy=sum(RFpred == ts$classe)/length(ts$classe)
+RFaccuracy
+
+GBMpred=predict(GBM,newdata=ts)
+GBMaccuracy=sum(GBMpred == ts$classe)/length(ts$classe)
+GBMaccuracy
+
+NBpred=predict(NB,newdata=ts)
+NBaccuracy=sum(NBpred == ts$classe)/length(ts$classe)
+NBaccuracy
+
+table(RFaccuracy, GBMaccuracy, NBaccuracy)
+
+```
+
+From comparison of accuracies of RF, GBM, and NB methods, we can see that the RF method has the highest accuracy. Therefore, we pick the RF method for our predictions. 
+
+We now want to find the top-20 features of the RF model and train on the whole data set partition.
+
+```{r}
+varImp(RF)
+```
+
+The new testing and training dataset will be a subset of the original test and train, but only includes the top 20 important variables.
+
+```{r, cache=TRUE}
+TrainPart <- createDataPartition(y = Train$classe, p = 0.8, list = FALSE)
+training<-Train[TrainPart,]
+testing<-Train[-TrainPart,]
+
+training<-subset(training, select=c("yaw_belt","pitch_forearm","magnet_dumbbell_z","pitch_belt","accel_belt_z","magnet_dumbbell_y","magnet_dumbbell_x","magnet_belt_z","roll_forearm","roll_dumbbell","accel_dumbbell_z","magnet_belt_y","magnet_belt_x","gyros_belt_z","accel_dumbbell_y","yaw_dumbbell","roll_arm","accel_forearm_x","magnet_forearm_z","total_accel_dumbbell", "classe"))
+
+testing<-subset(training, select=c("yaw_belt","pitch_forearm","magnet_dumbbell_z","pitch_belt","accel_belt_z","magnet_dumbbell_y","magnet_dumbbell_x","magnet_belt_z","roll_forearm","roll_dumbbell","accel_dumbbell_z","magnet_belt_y","magnet_belt_x","gyros_belt_z","accel_dumbbell_y","yaw_dumbbell","roll_arm","accel_forearm_x","magnet_forearm_z","total_accel_dumbbell", "classe"))
+```
+
+Now we use cross validation for training control and apply the RF model on the whole training set. 
+
+```{r}
+tc<-trainControl(method = "cv", number = 7, verboseIter=FALSE , preProcOptions="pca", allowParallel=TRUE)
+RFmodel<-train(classe~.,data=training,method="rf",trControl=tc)
+```
+
+## Cross Validation with sub test set
+
+```{r}
+library(caret)
+CV <- predict(RFmodel, testing)
+confusionMatrix(CV, testing$classe)
+```
+
+The expected out-of-sample error corresponds to the quantity: 1-accuracy in the cross-validation data. Accuracy is the proportion of correct classified observation over the total sample in the sub-testing data set. Expected accuracy is the expected accuracy in the out-of-sample data set (i.e. original testing data set). Thus, the expected value of the out-of-sample error will correspond to the expected number of missclassified observations/total observations in the Test data set, which is the quantity: 1-accuracy found from the cross-validation data set.
+
+Now it is the time to apply our RF model on 20 sample tests in the Test data.
+
+```{r}
+test=subset(Test,select=c("yaw_belt","pitch_forearm","magnet_dumbbell_z","pitch_belt","accel_belt_z","magnet_dumbbell_y","magnet_dumbbell_x","magnet_belt_z","roll_forearm","roll_dumbbell","accel_dumbbell_z","magnet_belt_y","magnet_belt_x","gyros_belt_z","accel_dumbbell_y","yaw_dumbbell","roll_arm","accel_forearm_x","magnet_forearm_z","total_accel_dumbbell", "classe"))
+dim(test)
+TestPred=predict(RFmodel,newdata=Test)
+length(TestPred)
+
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("problem_id_",i,".txt")
+    write.table(x[i],file=filename,quote=FALSE,row.names=FALSE,col.names=FALSE)
+  }
+}
+pml_write_files(TestPred)
+```
